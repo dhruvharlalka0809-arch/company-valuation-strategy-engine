@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Optional
 
 import pandas as pd
 
@@ -21,6 +22,9 @@ class ValuationAssumptions:
     terminal_growth: float = 0.025
     forecast_years: int = 5
     size_discount: float = 0.10
+    dcf_weight: float = 0.60
+    ebitda_multiple_weight: float = 0.65
+    dilution_pct: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,13 @@ class ValuationSummary:
     current_share_price: float
     upside_downside: float
     wacc: float
+    present_value_fcf: float
+    discounted_terminal_value: float
+    terminal_value_pct_dcf: float
+    implied_ev_revenue: float
+    implied_ev_ebitda: float
+    roic: float
+    fcf_yield: float
     recommendation: str
     recommendation_reason: str
 
@@ -81,6 +92,7 @@ def build_forecast(financials: pd.DataFrame, assumptions: ValuationAssumptions) 
     base_margin = float(base["EBITDA_Margin"])
     base_year = int(base["Year"])
     previous_revenue = float(base["Revenue"])
+    previous_nwc = previous_revenue * assumptions.nwc_pct_revenue
     rows = []
 
     for year_index in range(1, assumptions.forecast_years + 1):
@@ -93,7 +105,8 @@ def build_forecast(financials: pd.DataFrame, assumptions: ValuationAssumptions) 
         ebit = ebitda - depreciation
         cash_taxes = max(0.0, ebit * assumptions.tax_rate)
         capex = revenue * assumptions.capex_pct_revenue
-        nwc_investment = (revenue - previous_revenue) * assumptions.nwc_pct_revenue
+        nwc_balance = revenue * assumptions.nwc_pct_revenue
+        nwc_investment = nwc_balance - previous_nwc
         free_cash_flow = ebit * (1 - assumptions.tax_rate) + depreciation - capex - nwc_investment
         rows.append(
             {
@@ -106,17 +119,23 @@ def build_forecast(financials: pd.DataFrame, assumptions: ValuationAssumptions) 
                 "EBIT": ebit,
                 "Cash_Taxes": cash_taxes,
                 "Capex": capex,
+                "NWC_Balance": nwc_balance,
                 "NWC_Investment": nwc_investment,
                 "Free_Cash_Flow": free_cash_flow,
                 "FCF_Margin": divide(free_cash_flow, revenue),
             }
         )
         previous_revenue = revenue
+        previous_nwc = nwc_balance
 
     return pd.DataFrame(rows)
 
 
 def calculate_dcf(forecast: pd.DataFrame, assumptions: ValuationAssumptions) -> float:
+    return calculate_dcf_details(forecast, assumptions)["enterprise_value"]
+
+
+def calculate_dcf_details(forecast: pd.DataFrame, assumptions: ValuationAssumptions) -> dict[str, float]:
     wacc = calculate_wacc(assumptions)
     discounted_fcf = 0.0
     for period, fcf in enumerate(forecast["Free_Cash_Flow"], start=1):
@@ -125,7 +144,14 @@ def calculate_dcf(forecast: pd.DataFrame, assumptions: ValuationAssumptions) -> 
     final_fcf = float(forecast.iloc[-1]["Free_Cash_Flow"])
     terminal_value = final_fcf * (1 + assumptions.terminal_growth) / (wacc - assumptions.terminal_growth)
     discounted_terminal = terminal_value / ((1 + wacc) ** len(forecast))
-    return discounted_fcf + discounted_terminal
+    enterprise_value = discounted_fcf + discounted_terminal
+    return {
+        "enterprise_value": enterprise_value,
+        "present_value_fcf": discounted_fcf,
+        "terminal_value": terminal_value,
+        "discounted_terminal_value": discounted_terminal,
+        "terminal_value_pct_dcf": divide(discounted_terminal, enterprise_value),
+    }
 
 
 def build_comps_valuation(comps: pd.DataFrame, latest_revenue: float, latest_ebitda: float, assumptions: ValuationAssumptions) -> pd.DataFrame:
@@ -134,7 +160,10 @@ def build_comps_valuation(comps: pd.DataFrame, latest_revenue: float, latest_ebi
     output["Size_Adjusted_EV_EBITDA"] = output["EV_EBITDA"] * (1 - assumptions.size_discount)
     output["Revenue_Implied_EV"] = output["Size_Adjusted_EV_Revenue"] * latest_revenue
     output["EBITDA_Implied_EV"] = output["Size_Adjusted_EV_EBITDA"] * latest_ebitda
-    output["Average_Implied_EV"] = output[["Revenue_Implied_EV", "EBITDA_Implied_EV"]].mean(axis=1)
+    revenue_weight = 1 - assumptions.ebitda_multiple_weight
+    output["Average_Implied_EV"] = (output["Revenue_Implied_EV"] * revenue_weight) + (
+        output["EBITDA_Implied_EV"] * assumptions.ebitda_multiple_weight
+    )
     return output.sort_values("Average_Implied_EV").reset_index(drop=True)
 
 
@@ -147,7 +176,8 @@ def summarize_valuation(
     normalized = normalize_financials(financials)
     latest = normalized.iloc[-1]
     forecast = build_forecast(normalized, assumptions)
-    dcf_ev = calculate_dcf(forecast, assumptions)
+    dcf_details = calculate_dcf_details(forecast, assumptions)
+    dcf_ev = dcf_details["enterprise_value"]
     comps_table = build_comps_valuation(
         comps,
         latest_revenue=float(latest["Revenue"]),
@@ -155,14 +185,19 @@ def summarize_valuation(
         assumptions=assumptions,
     )
     comps_ev = float(comps_table["Average_Implied_EV"].median())
-    blended_ev = (dcf_ev * 0.6) + (comps_ev * 0.4)
+    comps_weight = 1 - assumptions.dcf_weight
+    blended_ev = (dcf_ev * assumptions.dcf_weight) + (comps_ev * comps_weight)
     net_debt = float(latest["Net_Debt"])
-    shares = float(latest["Shares_Outstanding"])
+    shares = float(latest["Shares_Outstanding"]) * (1 + assumptions.dilution_pct)
     dcf_equity = dcf_ev - net_debt
     blended_equity = blended_ev - net_debt
     dcf_value_per_share = divide(dcf_equity, shares)
     blended_value_per_share = divide(blended_equity, shares)
     upside_downside = divide(blended_value_per_share - current_share_price, current_share_price)
+    invested_capital = blended_ev - float(latest["Net_Debt"]) + float(latest["Net_Debt"])
+    nopat = float(latest["EBIT"]) * (1 - assumptions.tax_rate)
+    roic = divide(nopat, invested_capital)
+    fcf_yield = divide(float(latest["Free_Cash_Flow"]), blended_ev)
     recommendation, reason = recommend(upside_downside, forecast, normalized)
 
     summary = ValuationSummary(
@@ -176,6 +211,13 @@ def summarize_valuation(
         current_share_price=current_share_price,
         upside_downside=upside_downside,
         wacc=calculate_wacc(assumptions),
+        present_value_fcf=dcf_details["present_value_fcf"],
+        discounted_terminal_value=dcf_details["discounted_terminal_value"],
+        terminal_value_pct_dcf=dcf_details["terminal_value_pct_dcf"],
+        implied_ev_revenue=divide(blended_ev, float(latest["Revenue"])),
+        implied_ev_ebitda=divide(blended_ev, float(latest["EBITDA"])),
+        roic=roic,
+        fcf_yield=fcf_yield,
         recommendation=recommendation,
         recommendation_reason=reason,
     )
@@ -236,27 +278,52 @@ def build_strategy_memo(summary: ValuationSummary, assumptions: ValuationAssumpt
 
 **Valuation readout:** The blended valuation indicates {format_money(summary.blended_enterprise_value)} enterprise value and {format_money(summary.blended_equity_value)} equity value, implying {format_currency(summary.blended_value_per_share)} per share versus the current price of {format_currency(summary.current_share_price)}.
 
-**DCF view:** DCF enterprise value is {format_money(summary.dcf_enterprise_value)} using a {summary.wacc:.1%} WACC and {assumptions.terminal_growth:.1%} terminal growth.
+**DCF view:** DCF enterprise value is {format_money(summary.dcf_enterprise_value)} using a {summary.wacc:.1%} WACC and {assumptions.terminal_growth:.1%} terminal growth. Terminal value represents {summary.terminal_value_pct_dcf:.1%} of DCF enterprise value.
 
-**Comparable company view:** Size-adjusted public comps imply {format_money(summary.comps_enterprise_value)} enterprise value after applying a {assumptions.size_discount:.0%} discount for scale and liquidity.
+**Comparable company view:** Size-adjusted public comps imply {format_money(summary.comps_enterprise_value)} enterprise value after applying a {assumptions.size_discount:.0%} discount for scale and liquidity. The blended valuation implies {summary.implied_ev_revenue:.1f}x revenue and {summary.implied_ev_ebitda:.1f}x EBITDA.
+
+**Capital efficiency:** Current ROIC is {summary.roic:.1%}; FCF yield on blended enterprise value is {summary.fcf_yield:.1%}.
 
 **Scenario range:** Downside value per share is {format_currency(float(downside["Value / Share"]))}; upside value per share is {format_currency(float(upside["Value / Share"]))}.
 
 **Strategic interpretation:** {summary.recommendation_reason}
 
+**Model disclosure:** The valuation uses a {assumptions.dcf_weight:.0%} DCF / {1 - assumptions.dcf_weight:.0%} comps blend and assumes {assumptions.dilution_pct:.0%} share dilution over the forecast period.
+
 **Management priorities:** Defend revenue growth, protect EBITDA margin expansion, improve cash conversion, and validate whether the market multiple gap is justified by size, liquidity, or execution risk.
 """
 
 
-def recommend(upside_downside: float, forecast: pd.DataFrame, historical: pd.DataFrame) -> tuple[str, str]:
+def recommend(upside_downside: float, forecast: pd.DataFrame, historical: pd.DataFrame, downside_upside: Optional[float] = None) -> tuple[str, str]:
     final_margin = float(forecast.iloc[-1]["EBITDA_Margin"])
     latest_margin = float(historical.iloc[-1]["EBITDA_Margin"])
     margin_expansion = final_margin - latest_margin
+    if downside_upside is not None and downside_upside >= 0 and upside_downside >= 0.15 and margin_expansion >= 0:
+        return "Undervalued", "Base-case upside is positive and the downside case still protects capital."
+    if downside_upside is not None and downside_upside <= -0.25:
+        return "High-risk valuation", "Base-case value must be weighed against meaningful downside-case impairment risk."
     if upside_downside >= 0.20 and margin_expansion >= 0:
         return "Undervalued", "Upside exceeds 20% and the operating forecast supports stable or expanding margins."
     if upside_downside <= -0.10:
         return "Overvalued", "Implied value is materially below the current share price, creating limited valuation support."
     return "Fairly valued", "Valuation support is balanced; the case depends on execution, growth durability, and margin delivery."
+
+
+def apply_downside_recommendation(
+    summary: ValuationSummary,
+    forecast: pd.DataFrame,
+    historical: pd.DataFrame,
+    scenario_summary: pd.DataFrame,
+) -> ValuationSummary:
+    normalized = normalize_financials(historical)
+    downside = scenario_summary.loc[scenario_summary["Scenario"] == "Downside"].iloc[0]
+    recommendation, reason = recommend(
+        summary.upside_downside,
+        forecast,
+        normalized,
+        downside_upside=float(downside["Upside / Downside"]),
+    )
+    return replace(summary, recommendation=recommendation, recommendation_reason=reason)
 
 
 def replace_assumptions(assumptions: ValuationAssumptions, **updates) -> ValuationAssumptions:

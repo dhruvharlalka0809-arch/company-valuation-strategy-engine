@@ -4,6 +4,7 @@ import pandas as pd
 
 from src.valuation_model import (
     ValuationAssumptions,
+    apply_downside_recommendation,
     build_comps_valuation,
     build_forecast,
     build_scenario_summary,
@@ -63,6 +64,7 @@ class ValuationModelTests(unittest.TestCase):
         self.assertEqual(len(forecast), 5)
         self.assertGreater(forecast.iloc[-1]["Revenue"], forecast.iloc[0]["Revenue"])
         self.assertIn("Free_Cash_Flow", forecast.columns)
+        self.assertIn("NWC_Balance", forecast.columns)
 
     def test_comps_apply_size_discount(self):
         comps = build_comps_valuation(self.comps, 100.0, 20.0, self.assumptions)
@@ -75,6 +77,8 @@ class ValuationModelTests(unittest.TestCase):
 
         self.assertGreater(summary.blended_enterprise_value, 0)
         self.assertGreater(summary.blended_value_per_share, 0)
+        self.assertGreater(summary.terminal_value_pct_dcf, 0)
+        self.assertGreater(summary.implied_ev_ebitda, 0)
         self.assertIn(summary.recommendation, {"Undervalued", "Fairly valued", "Overvalued"})
         self.assertEqual(len(forecast), 5)
         self.assertFalse(comps.empty)
@@ -85,6 +89,15 @@ class ValuationModelTests(unittest.TestCase):
 
         self.assertEqual(set(scenarios["Scenario"]), {"Downside", "Base", "Upside"})
         self.assertEqual(len(sensitivity), 5)
+
+    def test_downside_scenario_can_update_recommendation(self):
+        forecast, _, summary = summarize_valuation(self.financials, self.comps, self.assumptions, 20.0)
+        scenarios = build_scenario_summary(self.financials, self.comps, self.assumptions, 20.0)
+
+        updated = apply_downside_recommendation(summary, forecast, self.financials, scenarios)
+
+        self.assertIn(updated.recommendation, {"Undervalued", "Fairly valued", "Overvalued", "High-risk valuation"})
+        self.assertTrue(updated.recommendation_reason)
 
     def test_strategy_memo_contains_actionable_sections(self):
         _, _, summary = summarize_valuation(self.financials, self.comps, self.assumptions, 20.0)

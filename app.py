@@ -3,6 +3,7 @@ import streamlit as st
 
 from src.valuation_model import (
     ValuationAssumptions,
+    apply_downside_recommendation,
     build_scenario_summary,
     build_sensitivity,
     build_strategy_memo,
@@ -60,6 +61,9 @@ with st.sidebar:
     beta = st.slider("Beta", 0.6, 2.0, 1.15, 0.05)
     debt_weight = st.slider("Debt weight", 0.00, 0.60, 0.25, 0.05)
     size_discount = st.slider("Public comp size discount", 0.00, 0.40, 0.10, 0.025)
+    dcf_weight = st.slider("DCF blend weight", 0.00, 1.00, 0.60, 0.05)
+    ebitda_multiple_weight = st.slider("EV/EBITDA comp weight", 0.00, 1.00, 0.65, 0.05)
+    dilution_pct = st.slider("Forecast share dilution", 0.00, 0.15, 0.05, 0.01)
     uploaded_file = st.file_uploader("Upload company financials", type="csv")
 
 assumptions = ValuationAssumptions(
@@ -69,6 +73,9 @@ assumptions = ValuationAssumptions(
     beta=beta,
     debt_weight=debt_weight,
     size_discount=size_discount,
+    dcf_weight=dcf_weight,
+    ebitda_multiple_weight=ebitda_multiple_weight,
+    dilution_pct=dilution_pct,
 )
 
 try:
@@ -81,14 +88,16 @@ except Exception as exc:
 comps_source = load_comps()
 forecast, comps, summary = summarize_valuation(financials, comps_source, assumptions, current_share_price)
 scenario_summary = build_scenario_summary(financials, comps_source, assumptions, current_share_price)
+summary = apply_downside_recommendation(summary, forecast, financials, scenario_summary)
 sensitivity = build_sensitivity(financials, comps_source, assumptions, current_share_price)
 
-hero = st.columns(5)
+hero = st.columns(6)
 hero[0].metric("Recommendation", summary.recommendation)
 hero[1].metric("Blended Value / Share", format_currency(summary.blended_value_per_share), f"{summary.upside_downside:.1%}")
 hero[2].metric("DCF EV", format_money(summary.dcf_enterprise_value))
 hero[3].metric("Comps EV", format_money(summary.comps_enterprise_value))
 hero[4].metric("WACC", f"{summary.wacc:.1%}")
+hero[5].metric("Terminal % of DCF", f"{summary.terminal_value_pct_dcf:.1%}")
 
 st.divider()
 
@@ -114,6 +123,8 @@ with overview_tab:
         st.write(f"Blended equity value: **{format_money(summary.blended_equity_value)}**")
         st.write(f"Current share price: **{format_currency(current_share_price)}**")
         st.write(f"Implied upside/downside: **{summary.upside_downside:.1%}**")
+        st.write(f"Target implied multiple: **{summary.implied_ev_revenue:.1f}x revenue / {summary.implied_ev_ebitda:.1f}x EBITDA**")
+        st.write(f"Capital efficiency: **{summary.roic:.1%} ROIC / {summary.fcf_yield:.1%} FCF yield**")
 
     valuation_bridge = pd.DataFrame(
         {
@@ -131,14 +142,15 @@ with overview_tab:
 
 with dcf_tab:
     st.subheader("DCF Forecast")
-    dcf_cols = st.columns(4)
+    dcf_cols = st.columns(5)
     dcf_cols[0].metric("DCF Enterprise Value", format_money(summary.dcf_enterprise_value))
     dcf_cols[1].metric("DCF Equity Value", format_money(summary.dcf_equity_value))
     dcf_cols[2].metric("DCF Value / Share", format_currency(summary.dcf_value_per_share))
     dcf_cols[3].metric("Terminal Growth", f"{terminal_growth:.1%}")
+    dcf_cols[4].metric("PV of Terminal Value", format_money(summary.discounted_terminal_value))
     forecast_display = format_money_columns(
         format_percent_columns(forecast, ["Revenue_Growth", "EBITDA_Margin", "FCF_Margin"]),
-        ["Revenue", "EBITDA", "Depreciation", "EBIT", "Cash_Taxes", "Capex", "NWC_Investment", "Free_Cash_Flow"],
+        ["Revenue", "EBITDA", "Depreciation", "EBIT", "Cash_Taxes", "Capex", "NWC_Balance", "NWC_Investment", "Free_Cash_Flow"],
     )
     st.dataframe(
         forecast_display,
@@ -148,6 +160,10 @@ with dcf_tab:
 
 with comps_tab:
     st.subheader("Size-Adjusted Comparable Company Valuation")
+    comp_cols = st.columns(3)
+    comp_cols[0].metric("Target EV / Revenue", f"{summary.implied_ev_revenue:.1f}x")
+    comp_cols[1].metric("Target EV / EBITDA", f"{summary.implied_ev_ebitda:.1f}x")
+    comp_cols[2].metric("EV/EBITDA Weight", f"{ebitda_multiple_weight:.0%}")
     comps_display = format_money_columns(
         format_percent_columns(comps, ["Revenue_Growth", "EBITDA_Margin"]),
         ["Revenue_Implied_EV", "EBITDA_Implied_EV", "Average_Implied_EV"],
