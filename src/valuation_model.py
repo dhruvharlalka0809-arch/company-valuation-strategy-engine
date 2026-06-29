@@ -194,7 +194,7 @@ def summarize_valuation(
     dcf_value_per_share = divide(dcf_equity, shares)
     blended_value_per_share = divide(blended_equity, shares)
     upside_downside = divide(blended_value_per_share - current_share_price, current_share_price)
-    invested_capital = blended_ev - float(latest["Net_Debt"]) + float(latest["Net_Debt"])
+    invested_capital = blended_ev
     nopat = float(latest["EBIT"]) * (1 - assumptions.tax_rate)
     roic = divide(nopat, invested_capital)
     fcf_yield = divide(float(latest["Free_Cash_Flow"]), blended_ev)
@@ -282,7 +282,7 @@ def build_strategy_memo(summary: ValuationSummary, assumptions: ValuationAssumpt
 
 **Comparable company view:** Size-adjusted public comps imply {format_money(summary.comps_enterprise_value)} enterprise value after applying a {assumptions.size_discount:.0%} discount for scale and liquidity. The blended valuation implies {summary.implied_ev_revenue:.1f}x revenue and {summary.implied_ev_ebitda:.1f}x EBITDA.
 
-**Capital efficiency:** Current ROIC is {summary.roic:.1%}; FCF yield on blended enterprise value is {summary.fcf_yield:.1%}.
+**Capital efficiency:** Valuation-implied ROIC is {summary.roic:.1%}; FCF yield on blended enterprise value is {summary.fcf_yield:.1%}. ROIC uses blended enterprise value as a proxy for invested capital.
 
 **Scenario range:** Downside value per share is {format_currency(float(downside["Value / Share"]))}; upside value per share is {format_currency(float(upside["Value / Share"]))}.
 

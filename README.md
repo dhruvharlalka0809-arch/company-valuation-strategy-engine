@@ -11,7 +11,7 @@ A Streamlit dashboard that values a company using DCF, size-adjusted comparable 
 - Compares implied value per share to current share price
 - Produces Downside, Base, and Upside scenarios
 - Shows terminal value as a percentage of DCF enterprise value
-- Calculates target implied EV/Revenue, EV/EBITDA, ROIC, and FCF yield
+- Calculates target implied EV/Revenue, EV/EBITDA, valuation-implied ROIC, and FCF yield
 - Applies downside-case context to the recommendation logic
 - Generates a strategic memo with recommendation, valuation readout, risks, and management priorities
 - Supports CSV upload for custom company financials
@@ -57,7 +57,7 @@ python scripts/validate.py
 
 - Built a valuation dashboard combining DCF, WACC, public comps, sensitivity, and scenarios
 - Added size-adjusted comparable company valuation to avoid over-crediting large public-market multiples
-- Added terminal value disclosure, target implied multiples, ROIC, FCF yield, and downside-aware recommendation logic
+- Added terminal value disclosure, target implied multiples, valuation-implied ROIC, FCF yield, and downside-aware recommendation logic
 - Converted valuation output into a strategic recommendation memo for business and consulting audiences
 - Designed the project to support PE, corporate finance, business analyst, and consulting applications
 

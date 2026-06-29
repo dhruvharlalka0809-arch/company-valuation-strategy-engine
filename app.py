@@ -124,7 +124,7 @@ with overview_tab:
         st.write(f"Current share price: **{format_currency(current_share_price)}**")
         st.write(f"Implied upside/downside: **{summary.upside_downside:.1%}**")
         st.write(f"Target implied multiple: **{summary.implied_ev_revenue:.1f}x revenue / {summary.implied_ev_ebitda:.1f}x EBITDA**")
-        st.write(f"Capital efficiency: **{summary.roic:.1%} ROIC / {summary.fcf_yield:.1%} FCF yield**")
+        st.write(f"Capital efficiency: **{summary.roic:.1%} valuation-implied ROIC / {summary.fcf_yield:.1%} FCF yield**")
 
     valuation_bridge = pd.DataFrame(
         {
