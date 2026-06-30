@@ -2,6 +2,10 @@
 
 A Streamlit dashboard that values a company using DCF, size-adjusted comparable companies, scenarios, sensitivity analysis, and a strategic recommendation memo.
 
+## Live Demo
+
+[Open the Streamlit app](https://strategy-valuation-engine.streamlit.app/)
+
 ## What It Does
 
 - Builds a five-year revenue, EBITDA, EBIT, and free cash flow forecast
